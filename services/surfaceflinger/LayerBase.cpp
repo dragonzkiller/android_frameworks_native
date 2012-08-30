@@ -27,6 +27,9 @@
 #include <GLES/glext.h>
 
 #include <hardware/hardware.h>
+#ifdef QCOMHW
+#include <gralloc_priv.h>
+#endif
 
 #include "clz.h"
 #include "LayerBase.h"
@@ -34,6 +37,9 @@
 #include "DisplayHardware/DisplayHardware.h"
 
 namespace android {
+
+//Helper
+bool isLayerExternalOnly(const sp<Layer>& layer);
 
 // ---------------------------------------------------------------------------
 
@@ -66,13 +72,13 @@ String8 LayerBase::getName() const {
 }
 
 const GraphicPlane& LayerBase::graphicPlane(int dpy) const
-{ 
+{
     return mFlinger->graphicPlane(dpy);
 }
 
 GraphicPlane& LayerBase::graphicPlane(int dpy)
 {
-    return mFlinger->graphicPlane(dpy); 
+    return mFlinger->graphicPlane(dpy);
 }
 
 void LayerBase::initStates(uint32_t w, uint32_t h, uint32_t flags)
@@ -184,7 +190,7 @@ bool LayerBase::setCrop(const Rect& crop) {
 Rect LayerBase::visibleBounds() const
 {
     return mTransformedBounds;
-}      
+}
 
 void LayerBase::setVisibleRegion(const Region& visibleRegion) {
     // always called from main thread
@@ -337,11 +343,19 @@ bool LayerBase::getFiltering() const
 
 void LayerBase::draw(const Region& clip) const
 {
+    //Dont draw External-only layers
+    if (isLayerExternalOnly(getLayer())) {
+        return;
+    }
     onDraw(clip);
 }
 
 void LayerBase::drawForSreenShot()
 {
+    //Dont draw External-only layers
+    if (isLayerExternalOnly(getLayer())) {
+        return;
+    }
     const DisplayHardware& hw(graphicPlane(0).displayHardware());
     setFiltering(true);
     onDraw( Region(hw.bounds()) );
@@ -359,6 +373,7 @@ void LayerBase::clearWithOpenGL(const Region& clip, GLclampf red,
     glDisable(GL_TEXTURE_EXTERNAL_OES);
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_BLEND);
+    glDisable(GL_DITHER);
 
     glVertexPointer(2, GL_FLOAT, 0, mVertices);
     glDrawArrays(GL_TRIANGLE_FAN, 0, mNumVertices);
@@ -422,6 +437,12 @@ void LayerBase::drawWithOpenGL(const Region& clip) const
     texCoords[3].v = top;
     for (int i = 0; i < 4; i++) {
         texCoords[i].v = 1.0f - texCoords[i].v;
+    }
+
+    if (needsDithering()) {
+        glEnable(GL_DITHER);
+    } else {
+        glDisable(GL_DITHER);
     }
 
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
@@ -558,5 +579,20 @@ LayerBaseClient::LayerCleaner::~LayerCleaner() {
 }
 
 // ---------------------------------------------------------------------------
+
+//Helper for external-only layers
+bool isLayerExternalOnly(const sp<Layer>& layer) {
+#ifdef QCOMHW
+    if(layer != NULL) {
+        const sp<GraphicBuffer>& buffer(layer->getActiveBuffer());
+        if (buffer != NULL) {
+            const int usage = buffer->getUsage();
+            if(usage & GRALLOC_USAGE_PRIVATE_EXTERNAL_ONLY)
+                return true;
+        }
+    }
+#endif
+    return false;
+}
 
 }; // namespace android

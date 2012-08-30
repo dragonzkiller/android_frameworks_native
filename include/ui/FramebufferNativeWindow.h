@@ -28,7 +28,12 @@
 #include <ui/ANativeObjectBase.h>
 #include <ui/Rect.h>
 
-#define NUM_FRAME_BUFFERS  2
+#ifdef SAMSUNG_HDMI_SUPPORT
+#include "SecHdmiClient.h"
+#endif
+
+#define MIN_NUM_FRAME_BUFFERS  2
+#define MAX_NUM_FRAME_BUFFERS  3
 
 extern "C" EGLNativeWindowType android_createDisplaySurface(void);
 
@@ -38,6 +43,9 @@ namespace android {
 
 class Surface;
 class NativeBuffer;
+#ifdef SAMSUNG_HDMI_SUPPORT
+class SecHdmiClient;
+#endif
 
 // ---------------------------------------------------------------------------
 
@@ -74,7 +82,7 @@ private:
     framebuffer_device_t* fbDev;
     alloc_device_t* grDev;
 
-    sp<NativeBuffer> buffers[NUM_FRAME_BUFFERS];
+    sp<NativeBuffer> buffers[MAX_NUM_FRAME_BUFFERS];
     sp<NativeBuffer> front;
     
     mutable Mutex mutex;
@@ -84,6 +92,9 @@ private:
     int32_t mBufferHead;
     int32_t mCurrentBufferIndex;
     bool mUpdateOnDemand;
+#ifdef SAMSUNG_HDMI_SUPPORT
+    SecHdmiClient *mHdmiClient;
+#endif
 };
     
 // ---------------------------------------------------------------------------

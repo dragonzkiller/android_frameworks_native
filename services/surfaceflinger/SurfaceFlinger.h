@@ -42,6 +42,10 @@
 
 #include "MessageQueue.h"
 
+#ifdef BOARD_USES_SAMSUNG_HDMI
+#include "SecHdmiClient.h"
+#endif
+
 namespace android {
 
 // ---------------------------------------------------------------------------
@@ -98,6 +102,11 @@ public:
     virtual ~GraphicBufferAlloc();
     virtual sp<GraphicBuffer> createGraphicBuffer(uint32_t w, uint32_t h,
         PixelFormat format, uint32_t usage, status_t* error);
+#ifdef QCOM_HARDWARE
+    virtual void setGraphicBufferSize(int size);
+private:
+    int mBufferSize;
+#endif
 };
 
 // ---------------------------------------------------------------------------
@@ -215,6 +224,9 @@ public:
     sp<Layer> getLayer(const sp<ISurface>& sur) const;
 
     GLuint getProtectedTexName() const { return mProtectedTexName; }
+
+    // 0: surface doesn't need dithering, 1: use if necessary, 2: use permanently
+    inline int  getUseDithering() const { return mUseDithering; }
 
 
     class MessageDestroyGLTexture : public MessageBase {
@@ -423,6 +435,10 @@ private:
 
    // only written in the main thread, only read in other threads
    volatile     int32_t                     mSecureFrameBuffer;
+                int                         mUseDithering;
+#if defined(BOARD_USES_SAMSUNG_HDMI) && defined(SAMSUNG_EXYNOS5250)
+    SecHdmiClient *                         mHdmiClient;
+#endif
 };
 
 // ---------------------------------------------------------------------------

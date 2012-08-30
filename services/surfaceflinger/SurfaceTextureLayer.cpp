@@ -28,7 +28,8 @@ namespace android {
 
 
 SurfaceTextureLayer::SurfaceTextureLayer()
-    : BufferQueue(true) {
+    : BufferQueue(true)
+{
 }
 
 SurfaceTextureLayer::~SurfaceTextureLayer() {

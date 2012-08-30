@@ -34,7 +34,11 @@ namespace android {
 
 class BufferQueue : public BnSurfaceTexture {
 public:
+#ifdef QCOM_HARDWARE
+    enum { MIN_UNDEQUEUED_BUFFERS = 3 };
+#else
     enum { MIN_UNDEQUEUED_BUFFERS = 2 };
+#endif
     enum { NUM_BUFFER_SLOTS = 32 };
     enum { NO_CONNECTED_API = 0 };
     enum { INVALID_BUFFER_SLOT = -1 };
@@ -136,6 +140,16 @@ public:
     // queued buffers will be retired in order.
     // The default mode is asynchronous.
     virtual status_t setSynchronousMode(bool enabled);
+
+#ifdef QCOM_HARDWARE
+    // setBufferSize enables to specify the user defined size of the buffer
+    // that needs to be allocated by surfaceflinger for its client. This is used
+    // for interlaced use cases where the user can pass extra information about
+    // the type of the frame whether it is interlaced or progressive frame.
+    virtual status_t setBuffersSize(int size);
+
+    virtual status_t setMinUndequeuedBufferCount(int count);
+#endif
 
     // connect attempts to connect a producer client API to the BufferQueue.
     // This must be called before any other ISurfaceTexture methods are called

@@ -43,6 +43,10 @@
 #include "SurfaceFlinger.h"
 #include "SurfaceTextureLayer.h"
 
+#ifdef QCOMHW
+#include <gpuformats.h>
+#endif
+
 #define DEBUG_RESIZE    0
 
 namespace android {
@@ -210,10 +214,20 @@ status_t Layer::setBuffers( uint32_t w, uint32_t h,
     mSurfaceTexture->setDefaultBufferFormat(format);
     mSurfaceTexture->setConsumerUsageBits(getEffectiveUsage(0));
 
-    // we use the red index
-    int displayRedSize = displayInfo.getSize(PixelFormatInfo::INDEX_RED);
-    int layerRedsize = info.getSize(PixelFormatInfo::INDEX_RED);
-    mNeedsDithering = layerRedsize > displayRedSize;
+    int useDither = mFlinger->getUseDithering();
+    if (useDither) {
+        if (useDither == 2) {
+            mNeedsDithering = true;
+        }
+        else {
+            // we use the red index
+            int displayRedSize = displayInfo.getSize(PixelFormatInfo::INDEX_RED);
+            int layerRedsize = info.getSize(PixelFormatInfo::INDEX_RED);
+            mNeedsDithering = (layerRedsize > displayRedSize);
+        }
+    } else {
+        mNeedsDithering = false;
+    }
 
     return NO_ERROR;
 }
@@ -344,7 +358,12 @@ void Layer::onDraw(const Region& clip) const
         }
         return;
     }
-
+#ifdef QCOMHW
+    if (!qdutils::isGPUSupportedFormat(mActiveBuffer->format)) {
+        clearWithOpenGL(clip, 0, 0, 0, 1);
+        return;
+    }
+#endif
     if (!isProtected()) {
         // TODO: we could be more subtle with isFixedSize()
         const bool useFiltering = getFiltering() || needsFiltering() || isFixedSize();
@@ -765,7 +784,12 @@ uint32_t Layer::getEffectiveUsage(uint32_t usage) const
         // need a hardware-protected path to external video sink
         usage |= GraphicBuffer::USAGE_PROTECTED;
     }
+#ifdef MISSING_GRALLOC_BUFFERS
+    usage |= GraphicBuffer::USAGE_HW_TEXTURE;
+#else
     usage |= GraphicBuffer::USAGE_HW_COMPOSER;
+#endif
+
     return usage;
 }
 

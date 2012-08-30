@@ -64,9 +64,21 @@
 #include <private/gui/SharedBufferStack.h>
 #include <gui/BitTube.h>
 
+#ifdef BOARD_USES_SAMSUNG_HDMI
+#include "SecTVOutService.h"
+#endif
+
+#ifdef QCOMHW
+#include <clear_regions.h>
+#endif
+
 #define EGL_VERSION_HW_ANDROID  0x3143
 
 #define DISPLAY_COUNT       1
+
+#ifdef USE_LGE_HDMI
+extern "C" void NvDispMgrAutoOrientation(int rotation);
+#endif
 
 namespace android {
 // ---------------------------------------------------------------------------
@@ -96,9 +108,28 @@ SurfaceFlinger::SurfaceFlinger()
         mDebugInTransaction(0),
         mLastTransactionTime(0),
         mBootFinished(false),
-        mSecureFrameBuffer(0)
+        mSecureFrameBuffer(0),
+        mUseDithering(0)
 {
     init();
+#ifdef BOARD_USES_SAMSUNG_HDMI
+    LOGD(">>> Run service");
+    android::SecTVOutService::instantiate();
+#ifdef SAMSUNG_EXYNOS5250
+    mHdmiClient = SecHdmiClient::getInstance();
+    mHdmiClient->setHdmiEnable(1);
+
+    const int orientation = ISurfaceComposer::eOrientationDefault;
+    if (uint32_t(orientation) == eOrientation90)
+        mHdmiClient->setHdmiRotate(270, 0);
+    else if(uint32_t(orientation) == eOrientation180)
+        mHdmiClient->setHdmiRotate(180, 0);
+    else if(uint32_t(orientation) == eOrientation270)
+        mHdmiClient->setHdmiRotate(90, 0);
+    else
+        mHdmiClient->setHdmiRotate(0, 0);
+#endif
+#endif
 }
 
 void SurfaceFlinger::init()
@@ -119,8 +150,12 @@ void SurfaceFlinger::init()
     }
 #endif
 
+    property_get("persist.sys.use_dithering", value, "1");
+    mUseDithering = atoi(value);
+
     ALOGI_IF(mDebugRegion,       "showupdates enabled");
     ALOGI_IF(mDebugDDMS,         "DDMS debugging enabled");
+    ALOGI_IF(mUseDithering,      "use dithering");
 }
 
 void SurfaceFlinger::onFirstRef()
@@ -264,7 +299,12 @@ status_t SurfaceFlinger::readyToRun()
     glPixelStorei(GL_PACK_ALIGNMENT, 4);
     glEnableClientState(GL_VERTEX_ARRAY);
     glShadeModel(GL_FLAT);
-    glDisable(GL_DITHER);
+    if (mUseDithering == 0 || mUseDithering == 1) {
+        glDisable(GL_DITHER);
+    }
+    else if (mUseDithering == 2) {
+        glEnable(GL_DITHER);
+    }
     glDisable(GL_CULL_FACE);
 
     const uint16_t g0 = pack565(0x0F,0x1F,0x0F);
@@ -474,6 +514,7 @@ void SurfaceFlinger::postFramebuffer()
         mVisibleLayersSortedByZ[i]->onLayerDisplayed();
     }
 
+
     mLastSwapBufferTime = systemTime() - now;
     mDebugInSwapBuffers = 0;
     mSwapRegion.clear();
@@ -540,7 +581,9 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
             // Currently unused: const uint32_t flags = mCurrentState.orientationFlags;
             GraphicPlane& plane(graphicPlane(dpy));
             plane.setOrientation(orientation);
-
+#ifdef QCOMHW
+            const Transform& planeTransform(plane.transform());
+#endif
             // update the shared control block
             const DisplayHardware& hw(plane.displayHardware());
             volatile display_cblk_t* dcblk = mServerCblk->displays + dpy;
@@ -550,6 +593,26 @@ void SurfaceFlinger::handleTransactionLocked(uint32_t transactionFlags)
 
             mVisibleRegionsDirty = true;
             mDirtyRegion.set(hw.bounds());
+
+#if defined(BOARD_USES_SAMSUNG_HDMI) && defined(SAMSUNG_EXYNOS5250)
+            HWComposer& hwc(graphicPlane(0).displayHardware().getHwComposer());
+            int overlayLayerCount = hwc.getLayerCount(HWC_OVERLAY);
+            if (uint32_t(orientation) == eOrientation90)
+                mHdmiClient->setHdmiRotate(270, overlayLayerCount);
+            else if(uint32_t(orientation) == eOrientation180)
+                mHdmiClient->setHdmiRotate(180, overlayLayerCount);
+            else if(uint32_t(orientation) == eOrientation270)
+                mHdmiClient->setHdmiRotate(90, overlayLayerCount);
+            else
+                mHdmiClient->setHdmiRotate(0, overlayLayerCount);
+#endif
+#ifdef QCOMHW
+            //set the new orientation to HWC
+            HWComposer& hwc(graphicPlane(0).displayHardware().getHwComposer());
+            hwc.eventControl(DisplayHardware::EVENT_ORIENTATION,
+                                              planeTransform.getOrientation());
+
+#endif
         }
 
         if (currentLayers.size() > mDrawingState.layersSortedByZ.size()) {
@@ -931,9 +994,15 @@ void SurfaceFlinger::composeSurfaces(const Region& dirty)
         const size_t count = layers.size();
 
         for (size_t i=0 ; i<count ; i++) {
+#ifdef HWC_LAYER_DIRTY_INFO
+            cur[i].flags &= (~0x80000000);
+#endif
             const sp<LayerBase>& layer(layers[i]);
             const Region clip(dirty.intersect(layer->visibleRegionScreen));
             if (!clip.isEmpty()) {
+#ifdef HWC_LAYER_DIRTY_INFO
+                cur[i].flags |= (0x80000000);  // flag for dirty region
+#endif
                 if (cur && (cur[i].compositionType == HWC_OVERLAY)) {
                     if (i && (cur[i].hints & HWC_HINT_CLEAR_FB)
                             && layer->isOpaque()) {
@@ -946,6 +1015,14 @@ void SurfaceFlinger::composeSurfaces(const Region& dirty)
                 // render the layer
                 layer->draw(clip);
             }
+        }
+    } else if (cur && !mWormholeRegion.isEmpty()) {
+            const Region region(mWormholeRegion.intersect(mDirtyRegion));
+            if (!region.isEmpty()) {
+#ifdef QCOMHW
+               if (0 != qdutils::qcomuiClearRegion(region, hw.getEGLDisplay()))
+#endif
+                      drawWormhole();
         }
     }
 }
@@ -1379,6 +1456,9 @@ void SurfaceFlinger::onScreenAcquired() {
     SurfaceFlinger::turnElectronBeamOn(mElectronBeamAnimationMode);
     // from this point on, SF will process updates again
     repaintEverything();
+#if defined(BOARD_USES_HDMI) && defined(SAMSUNG_EXYNOS5250)
+    mHdmiClient->setHdmiEnable(1);
+#endif
 }
 
 void SurfaceFlinger::onScreenReleased() {
@@ -1416,6 +1496,9 @@ void SurfaceFlinger::screenReleased() {
     };
     sp<MessageBase> msg = new MessageScreenReleased(this);
     postMessageSync(msg);
+#if defined(BOARD_USES_SAMSUNG_HDMI) && defined(SAMSUNG_EXYNOS5250)
+    mHdmiClient->setHdmiEnable(0);
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -2635,13 +2718,22 @@ status_t Client::destroySurface(SurfaceID sid) {
 
 // ---------------------------------------------------------------------------
 
-GraphicBufferAlloc::GraphicBufferAlloc() {}
+GraphicBufferAlloc::GraphicBufferAlloc() {
+#ifdef QCOM_HARDWARE
+    mBufferSize = 0;
+#endif
+}
 
 GraphicBufferAlloc::~GraphicBufferAlloc() {}
 
 sp<GraphicBuffer> GraphicBufferAlloc::createGraphicBuffer(uint32_t w, uint32_t h,
         PixelFormat format, uint32_t usage, status_t* error) {
-    sp<GraphicBuffer> graphicBuffer(new GraphicBuffer(w, h, format, usage));
+    sp<GraphicBuffer> graphicBuffer(new GraphicBuffer(w, h, format,
+                                                      usage
+#ifdef QCOM_HARDWARE
+                                                      ,mBufferSize
+#endif
+                                                      ));
     status_t err = graphicBuffer->initCheck();
     *error = err;
     if (err != 0 || graphicBuffer->handle == 0) {
@@ -2656,6 +2748,11 @@ sp<GraphicBuffer> GraphicBufferAlloc::createGraphicBuffer(uint32_t w, uint32_t h
     return graphicBuffer;
 }
 
+#ifdef QCOM_HARDWARE
+void GraphicBufferAlloc::setGraphicBufferSize(int size) {
+    mBufferSize = size;
+}
+#endif
 // ---------------------------------------------------------------------------
 
 GraphicPlane::GraphicPlane()
@@ -2752,6 +2849,9 @@ status_t GraphicPlane::setOrientation(int orientation)
     mWidth = int(w);
     mHeight = int(h);
 
+#ifdef USE_LGE_HDMI
+    NvDispMgrAutoOrientation(orientation);
+#endif
     Transform orientationTransform;
     GraphicPlane::orientationToTransfrom(orientation, w, h,
             &orientationTransform);
