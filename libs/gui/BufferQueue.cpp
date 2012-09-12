@@ -105,8 +105,6 @@ BufferQueue::BufferQueue(  bool allowSynchronousMode, int bufferCount ) :
     mConsumerName = String8::format("unnamed-%d-%d", getpid(), createProcessUniqueId());
 
     ST_LOGV("BufferQueue");
-
-    ALOGI("BufferQueue: minUndequeued=%d", mMinUndequeuedBuffers);
     sp<ISurfaceComposer> composer(ComposerService::getComposerService());
     mGraphicBufferAlloc = composer->createGraphicBufferAlloc();
     if (mGraphicBufferAlloc == 0) {
@@ -182,7 +180,7 @@ status_t BufferQueue::setTransformHint(uint32_t hint) {
 }
 
 status_t BufferQueue::setBufferCount(int bufferCount) {
-    ALOGI("setBufferCount: count=%d", bufferCount);
+    ST_LOGV("setBufferCount: count=%d", bufferCount);
 
     sp<ConsumerListener> listener;
     {
@@ -243,13 +241,6 @@ status_t BufferQueue::setBuffersSize(int size) {
     ST_LOGV("setBuffersSize: size=%d", size);
     Mutex::Autolock lock(mMutex);
     mGraphicBufferAlloc->setGraphicBufferSize(size);
-    return NO_ERROR;
-}
-
-status_t BufferQueue::setMinUndequeuedBufferCount(int count) {
-    ALOGI("setMinUndequeuedBufferCount: count=%d", count);
-    Mutex::Autolock lock(mMutex);
-    mMinUndequeuedBuffers = count;
     return NO_ERROR;
 }
 #endif
@@ -334,6 +325,9 @@ status_t BufferQueue::dequeueBuffer(int *outBuf, uint32_t w, uint32_t h,
         int foundSync = -1;
         int dequeuedCount = 0;
         bool tryAgain = true;
+#ifdef MISSING_GRALLOC_BUFFERS
+        int dequeueRetries = 5;
+#endif
         while (tryAgain) {
             if (mAbandoned) {
                 ST_LOGE("dequeueBuffer: SurfaceTexture has been abandoned!");
@@ -416,8 +410,22 @@ status_t BufferQueue::dequeueBuffer(int *outBuf, uint32_t w, uint32_t h,
             // clients are not allowed to dequeue more than one buffer
             // if they didn't set a buffer count.
             if (!mClientBufferCount && dequeuedCount) {
+#ifdef MISSING_GRALLOC_BUFFERS
+                if (--dequeueRetries) {
+                    ALOGD("SurfaceTexture::dequeue: Not allowed to dequeue more "
+                            "than a buffer SLEEPING\n");
+                    usleep(10000);
+                } else {
+                    mClientBufferCount = mServerBufferCount;
+                    ALOGD("SurfaceTexture::dequeue: Not allowed to dequeue more "
+                            "than a buffer RETRY mBufferCount:%d mServerBufferCount:%d\n",
+                            mBufferCount, mServerBufferCount);
+                }
+                continue;
+#else
                 ST_LOGE("dequeueBuffer: can't dequeue multiple buffers without "
                         "setting the buffer count");
+#endif
                 return -EINVAL;
             }
 
@@ -429,6 +437,15 @@ status_t BufferQueue::dequeueBuffer(int *outBuf, uint32_t w, uint32_t h,
                 // than allowed.
                 const int avail = mBufferCount - (dequeuedCount+1);
                 if (avail < (mMinUndequeuedBuffers-int(mSynchronousMode))) {
+#ifdef MISSING_GRALLOC_BUFFERS
+                    if (mClientBufferCount != 0) {
+                        mBufferCount++;
+                        mClientBufferCount = mServerBufferCount = mBufferCount;
+                        ALOGD("SurfaceTexture::dequeuebuffer: MIN EXCEEDED "
+                                "mBuffer:%d bumped\n", mBufferCount);
+                        continue;
+                    }
+#endif
                     ST_LOGE("dequeueBuffer: mMinUndequeuedBuffers=%d exceeded "
                             "(dequeued=%d)",
                             mMinUndequeuedBuffers-int(mSynchronousMode),
